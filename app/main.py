@@ -99,9 +99,9 @@ async def md_to_pdf(archive: UploadFile = File(...)):
         # Convert to PDF and send back
         result_path = convert_to_pdf(path_to_md)
         return FileResponse(
-            path=result_filename,
+            path=result_path,
             media_type='application/pdf',
-            filename=result_path
+            filename=result_filename
         )
 
 
