@@ -42,3 +42,25 @@ You can expose a different port if needed:
 ```bash
 docker run -p <port>:80 konvertik
 ```
+
+### Usage
+
+#### Change into a directory with a Markdown file
+
+```bash
+cd /directory/with/markdown/file
+```
+
+#### Create a zip archive
+
+```bash
+zip test.zip -r .
+```
+
+#### Send the zip archive to the server
+
+```bash
+curl -X POST http://127.0.0.1:8080/convert/md/to-pdf -F "archive=@test.zip" --output result.pdf
+```
+
+After the archive is sent to the server, the result pdf will be composed and sent back to you.
