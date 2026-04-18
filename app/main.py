@@ -104,7 +104,7 @@ async def md_to_pdf(archive: UploadFile = File(...)):
             filename=result_filename
         )
 
-@app.get('/healthcheck')
+@app.get('/health')
 async def healthcheck():
     return {"status": "ok"}
 
