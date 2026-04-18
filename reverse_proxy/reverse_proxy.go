@@ -69,7 +69,7 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	selectedServer := (*servers)[server_idx].Name
 	selectedURL := (*servers)[server_idx].URL
 	currentLoad := (*servers)[server_idx].ServingReqs
-	logServerLoads(servers)
+	logServerLoads(*servers)
 	mu.Unlock()
 
 	log.Printf("[%s] Selected server: %s (URL: %s, New load: %d)",
