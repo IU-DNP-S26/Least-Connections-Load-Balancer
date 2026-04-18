@@ -104,6 +104,9 @@ async def md_to_pdf(archive: UploadFile = File(...)):
             filename=result_filename
         )
 
+@app.get('/healthcheck')
+async def healthcheck():
+    return {"status": "ok"}
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
