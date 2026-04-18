@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,9 +15,11 @@ import (
 
 // server metadata for load balancing
 type Server struct {
-	Name        string // server name
-	URL         string // URL path to server
-	ServingReqs int    // number of currently serving requests by server
+	Name        string    // server name
+	URL         string    // URL path to server
+	ServingReqs int       // number of currently serving requests by server
+	isAlive     bool      // track if server is alive
+	LastCheck   time.Time // track last healthcheck time
 }
 
 // server metadata to construct URL
@@ -31,23 +34,93 @@ type Config struct {
 	Servers []ServerMetadata `json:"servers"`
 }
 
-// least connections algorithm(choose server with minimal load)
+// configuration for healthchecking
+const (
+	healthCheckTimeout  = 10 * time.Second // Timeout for healthcheck requests
+	healthCheckInterval = 10 * time.Second // How often to check servers
+	requestTimeout      = 30 * time.Second // Request timeout
+)
+
+// least connections algorithm(choose server with minimal load, only from alive servers)
 func min_load_serv_idx(servers []Server) int {
-	min_load_server_index := 0
-	for i := 1; i < len(servers); i++ {
-		if servers[i].ServingReqs < servers[min_load_server_index].ServingReqs {
-			min_load_server_index = i
+	min_load_server_index := -1
+	for i := 0; i < len(servers); i++ {
+		// only consider alive servers
+		if servers[i].isAlive {
+			if min_load_server_index == -1 || servers[i].ServingReqs < servers[min_load_server_index].ServingReqs {
+				min_load_server_index = i
+			}
 		}
 	}
-
+	// no alive servers found
 	return min_load_server_index
+}
+
+// server healthcheck
+func checkServerHealth(server *Server, client *http.Client) bool {
+	// create a healthcheck request to the server's health endpoint
+	healthURL := server.URL + "/health"
+	req, err := http.NewRequest("GET", healthURL, nil)
+	if err != nil {
+		log.Printf("ERROR: Failed to create health check request for %s: %v", server.Name, err)
+		return false
+	}
+	// set timeout for health check
+	healthClient := &http.Client{
+		Timeout: healthCheckTimeout,
+	}
+
+	resp, err := healthClient.Do(req)
+	if err != nil {
+		log.Printf("ERROR: Health check failed for %s: %v", server.Name, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	// server is healthy if returns 200 OK
+	if resp.StatusCode == http.StatusOK {
+		return true
+	}
+
+	log.Printf("ERROR: Health check for %s returned status %d", server.Name, resp.StatusCode)
+	return false
+}
+
+// background goroutine to periodically check all servers
+func startHealthChecker(servers *[]Server, mu *sync.Mutex, client *http.Client) {
+	ticker := time.NewTicker(healthCheckInterval)
+	go func() {
+		for range ticker.C {
+			mu.Lock()
+			for i := range *servers {
+				wasAlive := (*servers)[i].isAlive
+				if checkServerHealth(&(*servers)[i], client) {
+					(*servers)[i].isAlive = true
+					if !wasAlive {
+						log.Printf("INFO: Server %s is alive again! Re-added to pool", (*servers)[i].Name)
+					}
+				} else {
+					(*servers)[i].isAlive = false
+					if wasAlive {
+						log.Printf("INFO: Server %s is not responding! Removed from pool", (*servers)[i].Name)
+					}
+				}
+				(*servers)[i].LastCheck = time.Now()
+			}
+			logServerLoads(*servers)
+			mu.Unlock()
+		}
+	}()
 }
 
 // logging server loads
 func logServerLoads(servers []Server) {
-	loads := make(map[string]int)
+	loads := make(map[string]interface{})
 	for _, server := range servers {
-		loads[server.Name] = server.ServingReqs
+		loads[server.Name] = map[string]interface{}{
+			"serving_reqs": server.ServingReqs,
+			"is_alive":     server.isAlive,
+		}
 	}
 	log.Printf("Current server loads: %v", loads)
 }
@@ -64,6 +137,15 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	// choose server with minimal load to redirect request
 	mu.Lock()
 	server_idx := min_load_serv_idx(*servers)
+
+	// if no alive servers available
+	if server_idx == -1 {
+		mu.Unlock()
+		log.Printf("[%s] ERROR: No alive servers available to handle request", requestID)
+		http.Error(w, "Service unavailable - no backend servers available", http.StatusServiceUnavailable)
+		return
+	}
+
 	(*servers)[server_idx].ServingReqs++ // increment number of currently serving requests
 	// server details for logging
 	selectedServer := (*servers)[server_idx].Name
@@ -100,9 +182,30 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	req.Header = r.Header.Clone() // clone headers from client request
 	req.Header.Set("X-Forwarded-For", r.RemoteAddr)
 
+	// timeout context for the request
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	req = req.WithContext(ctx)
+
 	// get response
 	resp, err := client.Do(req)
 	if err != nil {
+		// if timeout error
+		if err == context.DeadlineExceeded {
+			log.Printf("[%s] ERROR: Request to %s timed out after %v - marking server as dead",
+				requestID, selectedServer, requestTimeout)
+
+			mu.Lock()
+			(*servers)[server_idx].isAlive = false
+			(*servers)[server_idx].LastCheck = time.Now()
+			log.Printf("ERROR: Server %s has been marked as DEAD due to timeout", selectedServer)
+			logServerLoads(*servers)
+			mu.Unlock()
+
+			http.Error(w, "Backend server timeout", http.StatusGatewayTimeout)
+			return
+		}
+
 		log.Printf("[%s] ERROR: Backend server %s failed to respond - %v",
 			requestID, selectedServer, err)
 		http.Error(w, "Server response failed", http.StatusBadGateway)
@@ -131,9 +234,10 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	}
 }
 
-/* Arguments:
-1st arg - reverse proxy port
-2nd arg - path to config file
+/*
+	 Arguments:
+		1st arg - reverse proxy port
+		2nd arg - path to config file
 */
 func main() {
 	// configure logging format
@@ -144,7 +248,7 @@ func main() {
 	if len(args) != 3 {
 		log.Printf("ERROR: Invalid number of arguments. Expected 2, got %d", len(args)-1)
 		log.Println("Usage: ./reverse-proxy <proxy_port> <config_file_path>")
-		log.Println("Example: ./reverse-proxy 8080 ./config.json")
+		log.Println("Example: ./reverse-proxy 8080 ./config_example.json")
 		return
 	}
 	reverse_proxy_port := args[1]
@@ -173,9 +277,10 @@ func main() {
 		// construct URL
 		url := server_metadata.Scheme + "://" + server_metadata.Address + ":" + server_metadata.Port
 		serverName := "server" + strconv.Itoa(i+1)
-		servers = append(servers, Server{serverName, url, 0})
+		// Initialize isAlive to true and LastCheck
+		servers = append(servers, Server{serverName, url, 0, true, time.Now()})
 
-		// ADDED - Detailed server configuration log
+		// Detailed server configuration log
 		log.Printf("  %s: %s -> %s (Scheme: %s, Address: %s, Port: %s)",
 			serverName, serverName, url,
 			server_metadata.Scheme, server_metadata.Address, server_metadata.Port)
@@ -183,8 +288,8 @@ func main() {
 
 	var mu sync.Mutex // mutex to avoid race conditions
 	client := &http.Client{
-		// timeout configuration
-		Timeout: 30 * time.Second,
+		// timeout configuration should be longer for normal requests
+		Timeout: requestTimeout + 10*time.Second,
 		Transport: &http.Transport{
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 100,
@@ -192,13 +297,16 @@ func main() {
 		},
 	}
 
+	// launch healthchecker background goroutine
+	startHealthChecker(&servers, &mu, client)
+
 	// create router and start reverse proxy
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		markdownToPdfHandler(w, r, &servers, &mu, client)
 	})
 
-	// healthcheck
+	// healthcheck endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -219,6 +327,8 @@ func main() {
 				"name":             server.Name,
 				"url":              server.URL,
 				"serving_requests": server.ServingReqs,
+				"is_alive":         server.isAlive,
+				"last_check":       server.LastCheck,
 			}
 		}
 		stats["servers"] = serverStats
@@ -227,6 +337,8 @@ func main() {
 	})
 
 	log.Printf("Starting reverse proxy on port %s", reverse_proxy_port)
+	log.Printf("Health checker configured: timeout=%v, interval=%v", healthCheckTimeout, healthCheckInterval)
+	log.Printf("Request timeout: %v", requestTimeout)
 
 	if err := http.ListenAndServe(":"+reverse_proxy_port, mux); err != nil {
 		log.Printf("ERROR: Failed to start reverse proxy - %v", err)
