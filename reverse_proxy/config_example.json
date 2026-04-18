@@ -1,0 +1,19 @@
+{
+    "servers": [
+        {
+            "address": "localhost",
+            "port": "8081",
+            "scheme": "http"
+        },
+        {
+            "address": "localhost",
+            "port": "8082",
+            "scheme": "http"
+        },
+        {
+            "address": "localhost",
+            "port": "8083",
+            "scheme": "http"
+        }
+    ]
+}
