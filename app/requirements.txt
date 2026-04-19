@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-python-multipart
-mistune
-weasyprint
-beautifulsoup4
-pillow
-pygments
-cffi
