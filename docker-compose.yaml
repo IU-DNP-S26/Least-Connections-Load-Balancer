@@ -31,7 +31,9 @@ services:
       - proxy-network
 
   reverse-proxy:
-    build: .
+    build:
+      context: ./reverse_proxy
+      dockerfile: Dockerfile
     container_name: reverse-proxy
     ports:
       - "8080:8080"
