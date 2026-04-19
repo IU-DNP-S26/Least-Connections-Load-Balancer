@@ -1,18 +1,18 @@
 {
     "servers": [
         {
-            "address": "localhost",
-            "port": "8081",
+            "address": "converter1",
+            "port": "80",
             "scheme": "http"
         },
         {
-            "address": "localhost",
-            "port": "8082",
+            "address": "converter2",
+            "port": "80",
             "scheme": "http"
         },
         {
-            "address": "localhost",
-            "port": "8083",
+            "address": "converter3",
+            "port": "80",
             "scheme": "http"
         }
     ]
