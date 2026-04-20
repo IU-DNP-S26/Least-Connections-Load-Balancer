@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // server metadata for load balancing
@@ -39,6 +42,44 @@ const (
 	healthCheckTimeout  = 10 * time.Second // Timeout for healthcheck requests
 	healthCheckInterval = 10 * time.Second // How often to check servers
 	requestTimeout      = 30 * time.Second // Request timeout
+)
+
+var (
+	lbRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "lb_requests_total",
+			Help: "Total number of requests handled by load balancer",
+		},
+		[]string{"backend", "status"},
+	)
+	lbRequestDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "lb_request_duration_seconds",
+			Help:    "Request latency in seconds by selected backend",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"backend"},
+	)
+	lbInFlightRequests = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "lb_inflight_requests",
+			Help: "Current number of in-flight requests",
+		},
+	)
+	lbBackendAlive = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "lb_backend_alive",
+			Help: "Backend health status where 1 is alive and 0 is down",
+		},
+		[]string{"backend"},
+	)
+	lbBackendServingRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "lb_backend_serving_requests",
+			Help: "Current number of requests served by each backend",
+		},
+		[]string{"backend"},
+	)
 )
 
 // least connections algorithm(choose server with minimal load, only from alive servers)
@@ -106,6 +147,12 @@ func startHealthChecker(servers *[]Server, mu *sync.Mutex, client *http.Client) 
 					}
 				}
 				(*servers)[i].LastCheck = time.Now()
+				if (*servers)[i].isAlive {
+					lbBackendAlive.WithLabelValues((*servers)[i].Name).Set(1)
+				} else {
+					lbBackendAlive.WithLabelValues((*servers)[i].Name).Set(0)
+				}
+				lbBackendServingRequests.WithLabelValues((*servers)[i].Name).Set(float64((*servers)[i].ServingReqs))
 			}
 			logServerLoads(*servers)
 			mu.Unlock()
@@ -130,7 +177,13 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	r *http.Request, servers *[]Server, mu *sync.Mutex, client *http.Client) {
 
 	startTime := time.Now()
+	selectedServer := "none"
 	requestID := fmt.Sprintf("%d", time.Now().UnixNano()) // as unique identifier
+	lbInFlightRequests.Inc()
+	defer lbInFlightRequests.Dec()
+	defer func() {
+		lbRequestDurationSeconds.WithLabelValues(selectedServer).Observe(time.Since(startTime).Seconds())
+	}()
 
 	log.Printf("[%s] Received request: %s %s from %s", requestID, r.Method, r.URL.Path, r.RemoteAddr)
 
@@ -142,15 +195,17 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	if server_idx == -1 {
 		mu.Unlock()
 		log.Printf("[%s] ERROR: No alive servers available to handle request", requestID)
+		lbRequestsTotal.WithLabelValues(selectedServer, strconv.Itoa(http.StatusServiceUnavailable)).Inc()
 		http.Error(w, "Service unavailable - no backend servers available", http.StatusServiceUnavailable)
 		return
 	}
 
 	(*servers)[server_idx].ServingReqs++ // increment number of currently serving requests
 	// server details for logging
-	selectedServer := (*servers)[server_idx].Name
+	selectedServer = (*servers)[server_idx].Name
 	selectedURL := (*servers)[server_idx].URL
 	currentLoad := (*servers)[server_idx].ServingReqs
+	lbBackendServingRequests.WithLabelValues(selectedServer).Set(float64(currentLoad))
 	logServerLoads(*servers)
 	mu.Unlock()
 
@@ -162,6 +217,7 @@ func markdownToPdfHandler(w http.ResponseWriter,
 		mu.Lock()
 		(*servers)[server_idx].ServingReqs-- // decrement number of currently serving requests
 		finalLoad := (*servers)[server_idx].ServingReqs
+		lbBackendServingRequests.WithLabelValues(selectedServer).Set(float64(finalLoad))
 		mu.Unlock()
 
 		elapsed := time.Since(startTime)
@@ -176,6 +232,7 @@ func markdownToPdfHandler(w http.ResponseWriter,
 	req, err := http.NewRequest(r.Method, (*servers)[server_idx].URL+r.URL.RequestURI(), r.Body)
 	if err != nil {
 		log.Printf("[%s] ERROR: Failed to create request - %v", requestID, err)
+		lbRequestsTotal.WithLabelValues(selectedServer, strconv.Itoa(http.StatusBadRequest)).Inc()
 		http.Error(w, "Bad request format", http.StatusBadRequest)
 		return
 	}
@@ -198,16 +255,19 @@ func markdownToPdfHandler(w http.ResponseWriter,
 			mu.Lock()
 			(*servers)[server_idx].isAlive = false
 			(*servers)[server_idx].LastCheck = time.Now()
+			lbBackendAlive.WithLabelValues(selectedServer).Set(0)
 			log.Printf("ERROR: Server %s has been marked as DEAD due to timeout", selectedServer)
 			logServerLoads(*servers)
 			mu.Unlock()
 
+			lbRequestsTotal.WithLabelValues(selectedServer, strconv.Itoa(http.StatusGatewayTimeout)).Inc()
 			http.Error(w, "Backend server timeout", http.StatusGatewayTimeout)
 			return
 		}
 
 		log.Printf("[%s] ERROR: Backend server %s failed to respond - %v",
 			requestID, selectedServer, err)
+		lbRequestsTotal.WithLabelValues(selectedServer, strconv.Itoa(http.StatusBadGateway)).Inc()
 		http.Error(w, "Server response failed", http.StatusBadGateway)
 		return
 	}
@@ -225,6 +285,7 @@ func markdownToPdfHandler(w http.ResponseWriter,
 
 	// send response to client
 	w.WriteHeader(resp.StatusCode)
+	lbRequestsTotal.WithLabelValues(selectedServer, strconv.Itoa(resp.StatusCode)).Inc()
 	// track bytes written
 	bytesWritten, err := io.Copy(w, resp.Body)
 	if err != nil {
@@ -279,6 +340,8 @@ func main() {
 		serverName := "server" + strconv.Itoa(i+1)
 		// Initialize isAlive to true and LastCheck
 		servers = append(servers, Server{serverName, url, 0, true, time.Now()})
+		lbBackendAlive.WithLabelValues(serverName).Set(1)
+		lbBackendServingRequests.WithLabelValues(serverName).Set(0)
 
 		// Detailed server configuration log
 		log.Printf("  %s: %s -> %s (Scheme: %s, Address: %s, Port: %s)",
@@ -287,6 +350,14 @@ func main() {
 	}
 
 	var mu sync.Mutex // mutex to avoid race conditions
+	prometheus.MustRegister(
+		lbRequestsTotal,
+		lbRequestDurationSeconds,
+		lbInFlightRequests,
+		lbBackendAlive,
+		lbBackendServingRequests,
+	)
+
 	client := &http.Client{
 		// timeout configuration should be longer for normal requests
 		Timeout: requestTimeout + 10*time.Second,
@@ -311,6 +382,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// endpoint to see current loads
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
