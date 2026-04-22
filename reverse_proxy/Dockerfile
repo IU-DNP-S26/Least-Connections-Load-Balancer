@@ -1,8 +1,9 @@
 FROM golang:1.21-alpine AS builder
 WORKDIR /app
+COPY go.mod ./
+RUN go mod download
 COPY . .
-RUN go mod init reverse-proxy 2>/dev/null || true && \
-    go mod tidy 2>/dev/null || true && \
+RUN go mod tidy && \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o reverse-proxy .
 
 FROM alpine:latest
