@@ -1,6 +1,7 @@
 from converters.md_to_pdf import convert_to_pdf
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 import uvicorn
 import sys
 import zipfile
@@ -10,6 +11,7 @@ import io
 
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
 
 async def extract_archive(archive: UploadFile, path: str) -> None:
@@ -63,6 +65,40 @@ def find_md(dir: str) -> str:
         raise HTTPException(status_code=400, detail='No .md file found')
 
     return result
+
+
+@app.get('/', response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse(request=request, name='index.html')
+
+
+@app.post('/', response_class=HTMLResponse)
+async def index_convert(request: Request, archive: UploadFile = File(...)):
+    try:
+        if not str(archive.filename).endswith('.zip'):
+            return templates.TemplateResponse(
+                request=request,
+                name='index.html',
+                context={'error': 'Please upload a .zip archive'}
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            await extract_archive(archive, tmpdir)
+            path_to_md = find_md(tmpdir)
+            md_filename = os.path.basename(path_to_md)
+            result_filename = os.path.splitext(md_filename)[0] + '.pdf'
+            result_path = convert_to_pdf(path_to_md)
+            return FileResponse(
+                path=result_path,
+                media_type='application/pdf',
+                filename=result_filename
+            )
+    except HTTPException as e:
+        return templates.TemplateResponse(
+            request=request,
+            name='index.html',
+            context={'error': e.detail}
+        )
 
 
 @app.post('/convert/md/to-pdf')

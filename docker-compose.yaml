@@ -13,6 +13,9 @@ services:
       - proxy-network
 
   converter2:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     image: mdconverter:latest
     container_name: converter2
     ports:
@@ -22,6 +25,9 @@ services:
       - proxy-network
 
   converter3:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     image: mdconverter:latest
     container_name: converter3
     ports:

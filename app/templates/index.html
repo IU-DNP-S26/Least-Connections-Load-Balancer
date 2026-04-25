@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markdown to PDF Converter</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            padding: 48px;
+            width: 100%;
+            max-width: 480px;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 32px;
+        }
+
+        .upload-area {
+            border: 2px dashed #d0d0d0;
+            border-radius: 8px;
+            padding: 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            margin-bottom: 16px;
+            position: relative;
+        }
+
+        .upload-area:hover {
+            border-color: #4f46e5;
+            background: #f8f7ff;
+        }
+
+        .upload-area.has-file {
+            border-color: #4f46e5;
+            background: #f8f7ff;
+        }
+
+        .upload-area input[type="file"] {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+
+        .upload-icon {
+            font-size: 36px;
+            margin-bottom: 12px;
+        }
+
+        .upload-label {
+            font-size: 15px;
+            color: #444;
+            font-weight: 500;
+        }
+
+        .upload-hint {
+            font-size: 13px;
+            color: #999;
+            margin-top: 4px;
+        }
+
+        .file-name {
+            font-size: 13px;
+            color: #4f46e5;
+            margin-top: 8px;
+            font-weight: 500;
+            display: none;
+        }
+
+        button[type="submit"] {
+            width: 100%;
+            padding: 14px;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 8px;
+        }
+
+        button[type="submit"]:hover {
+            background: #4338ca;
+        }
+
+        button[type="submit"]:disabled {
+            background: #a5a5a5;
+            cursor: not-allowed;
+        }
+
+        .error {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #b91c1c;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .instructions {
+            margin-top: 28px;
+            padding-top: 24px;
+            border-top: 1px solid #f0f0f0;
+        }
+
+        .instructions p {
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+
+        .instructions ol {
+            padding-left: 18px;
+        }
+
+        .instructions li {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Markdown → PDF</h1>
+        <p class="subtitle">Upload a .zip archive containing a .md file</p>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form action="/" method="post" enctype="multipart/form-data" id="uploadForm">
+            <div class="upload-area" id="uploadArea">
+                <input type="file" name="archive" accept=".zip" id="fileInput" required>
+                <div class="upload-icon">📦</div>
+                <div class="upload-label">Click to select a .zip file</div>
+                <div class="upload-hint">or drag and drop here</div>
+                <div class="file-name" id="fileName"></div>
+            </div>
+
+            <button type="submit" id="submitBtn">Convert to PDF</button>
+        </form>
+
+        <div class="instructions">
+            <p><strong>How it works:</strong></p>
+            <ol>
+                <li>Create a .zip archive with your .md file inside</li>
+                <li>Images referenced in the .md can be included in the archive</li>
+                <li>Only one .md file per archive is allowed</li>
+                <li>Click Convert — the PDF will download automatically</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileName = document.getElementById('fileName');
+        const submitBtn = document.getElementById('submitBtn');
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                fileName.textContent = fileInput.files[0].name;
+                fileName.style.display = 'block';
+                uploadArea.classList.add('has-file');
+            }
+        });
+
+        document.getElementById('uploadForm').addEventListener('submit', () => {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Converting...';
+        });
+    </script>
+</body>
+</html>
