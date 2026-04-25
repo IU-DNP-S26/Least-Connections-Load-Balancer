@@ -1,10 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
 @page {
     size: A4;
     margin: 15mm;
 }
 
 body {
-    font-family: "DejaVu Sans", sans-serif;
+    font-family: "Inter", "DejaVu Sans", sans-serif;
     font-size: 11pt;
     line-height: 1.5;
     color: #222;
@@ -30,7 +32,7 @@ p {
 }
 
 code {
-    font-family: "DejaVu Sans Mono", monospace;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     background: #f5f5f5;
     padding: 2px 4px;
     border-radius: 3px;
@@ -38,7 +40,7 @@ code {
 }
 
 pre {
-    font-family: "DejaVu Sans Mono", monospace;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
     background: #f5f5f5;
     padding: 8px;
     border-radius: 4px;
